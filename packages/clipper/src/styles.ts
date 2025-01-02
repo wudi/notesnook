@@ -16,10 +16,11 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
-import { constructUrl, FetchOptions } from "./fetch";
+import { constructUrl, FetchOptions } from "./fetch.js";
 import { compare, calculate, SpecificityArray } from "specificity";
-import { tokenize } from "./css-tokenizer";
+import { tokenize } from "./css-tokenizer.js";
 import { stringify, parse, SelectorType } from "css-what";
+import { safeQuerySelectorAll } from "./utils.js";
 
 const SHORTHANDS = [
   "animation",
@@ -70,40 +71,32 @@ const SHORTHANDS = [
 
 export async function inlineStylesheets(options?: FetchOptions) {
   for (const sheet of document.styleSheets) {
-    if (skipStyleSheet(sheet)) continue;
-
-    const node = sheet.ownerNode;
-    if (sheet.href && node instanceof HTMLLinkElement) {
-      try {
-        sheet.cssRules.length;
-      } catch (_e) {
-        const styleNode = await downloadStylesheet(node.href, options);
-        if (styleNode) node.replaceWith(styleNode);
-        console.error("Failed to access sheet", node.href, _e);
-      }
-    }
+    if (await skipStyleSheet(sheet, options)) continue;
   }
   await resolveImports(options);
 }
 
 async function resolveImports(options?: FetchOptions) {
-  let index = 0;
   for (const sheet of document.styleSheets) {
-    if (skipStyleSheet(sheet)) continue;
+    const rulesToDelete = [];
+    if (await skipStyleSheet(sheet, options)) continue;
 
-    for (const rule of sheet.cssRules) {
+    for (let i = 0; i < sheet.cssRules.length; ++i) {
+      const rule = sheet.cssRules.item(i);
+      if (!rule) continue;
+
       if (rule.type === CSSRule.IMPORT_RULE) {
         const href = (rule as CSSImportRule).href;
         const result = await downloadStylesheet(href, options);
         if (result) {
           if (sheet.ownerNode) sheet.ownerNode.before(result);
           else document.head.appendChild(result);
-
-          sheet.deleteRule(index);
+          rulesToDelete.push(i);
         }
       }
-      ++index;
     }
+
+    for (const ruleIndex of rulesToDelete) sheet.deleteRule(ruleIndex);
   }
 }
 
@@ -134,12 +127,12 @@ type PseudoElementStyle = BaseStyle & {
 type CSSStyledElements = Map<StyleableElement, SpecifiedStyle[]>;
 type CSSPseudoElements = Map<StyleableElement, PseudoElementStyle[]>;
 
-export function cacheStylesheets(documentStyles: CSSStyleDeclaration) {
+export async function cacheStylesheets(documentStyles: CSSStyleDeclaration) {
   const styledElements: CSSStyledElements = new Map();
   const styledPseudoElements: CSSPseudoElements = new Map();
 
   for (const sheet of document.styleSheets) {
-    if (skipStyleSheet(sheet)) continue;
+    if (await skipStyleSheet(sheet)) continue;
     let href = sheet.href || undefined;
     if (!href && sheet.ownerNode instanceof HTMLElement)
       href = sheet.ownerNode.getAttribute("href") || undefined;
@@ -194,7 +187,8 @@ function walkRules(
 
         for (const selector of selectors) {
           if (!selector || !selector.selector.trim()) continue;
-          const elements = document.querySelectorAll(
+          const elements = safeQuerySelectorAll(
+            document,
             selector.selector
           ) as NodeListOf<StyleableElement>;
 
@@ -218,7 +212,8 @@ function walkRules(
         }
       }
 
-      const elements = document.querySelectorAll(
+      const elements = safeQuerySelectorAll(
+        document,
         rule.selectorText
       ) as NodeListOf<StyleableElement>;
 
@@ -336,7 +331,18 @@ function lazyComputedStyle(element: StyleableElement) {
   }) as { style: CSSStyleDeclaration };
 }
 
-function skipStyleSheet(sheet: StyleSheet) {
+async function skipStyleSheet(sheet: CSSStyleSheet, options?: FetchOptions) {
+  try {
+    sheet.cssRules.length;
+  } catch (_e) {
+    const node = sheet.ownerNode;
+    if (sheet.href && node instanceof HTMLLinkElement) {
+      const styleNode = await downloadStylesheet(node.href, options);
+      if (styleNode) node.replaceWith(styleNode);
+    }
+    return true;
+  }
+
   return sheet.media.mediaText
     .split(",")
     .map((t) => t.trim())

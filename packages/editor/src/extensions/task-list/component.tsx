@@ -18,79 +18,37 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 import { Box, Flex, Input, Text } from "@theme-ui/components";
-import {
-  findChildren,
-  findParentNodeClosestToPos,
-  getNodeType
-} from "@tiptap/core";
-import { Node } from "prosemirror-model";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ToolButton } from "../../toolbar/components/tool-button";
-import { findParentNodeOfTypeClosestToPos } from "../../utils/prosemirror";
-import { ReactNodeViewProps } from "../react";
-import { TaskItemNode } from "../task-item";
-import { TaskListAttributes, TaskListNode } from "./task-list";
-import { countCheckedItems, deleteCheckedItems, sortList } from "./utils";
+import { useMemo } from "react";
+import { ToolButton } from "../../toolbar/components/tool-button.js";
+import { ReactNodeViewProps } from "../react/index.js";
+import { type TaskListAttributes } from "./task-list.js";
+import { replaceDateTime } from "../date-time/index.js";
+import { deleteCheckedItems, sortList, toggleChildren } from "./utils.js";
+import TaskList from "@tiptap/extension-task-list";
+import TaskItem from "@tiptap/extension-task-item";
+import { useIsMobile } from "../../toolbar/stores/toolbar-store.js";
+import { Icons } from "../../toolbar/icons.js";
+import { Icon } from "@notesnook/ui";
+import { strings } from "@notesnook/intl";
 
 export function TaskListComponent(
   props: ReactNodeViewProps<TaskListAttributes>
 ) {
-  // const isMobile = useIsMobile();
   const { editor, getPos, node, updateAttributes, forwardRef, pos } = props;
-  const taskItemType = getNodeType(TaskItemNode.name, editor.schema);
-  const { title, textDirection, readonly } = node.attrs;
-  const [stats, setStats] = useState({ checked: 0, total: 0, percentage: 0 });
-
-  const getParent = useCallback(() => {
-    if (pos === undefined) return;
-    return findParentNodeOfTypeClosestToPos(
-      editor.state.doc.resolve(pos),
-      taskItemType
-    );
-  }, [editor.state.doc, pos, taskItemType]);
+  const { title, textDirection, readonly, stats } = node.attrs;
+  const isMobile = useIsMobile();
+  const checked = stats.total > 0 && stats.total === stats.checked;
 
   const isNested = useMemo(() => {
-    return !!getParent();
-  }, [getParent]);
+    if (!pos || !(pos >= 0 && pos <= editor.state.doc.content.size))
+      return false;
 
-  const isReadonly = useMemo(() => {
-    console.log("HEERE!");
-    const isParentReadonly =
-      !!isNested &&
-      !!pos &&
-      !!findParentNodeClosestToPos(
-        editor.state.doc.resolve(pos),
-        (node) => node.type.name === TaskListNode.name && node.attrs.readonly
-      );
-    return readonly || isParentReadonly;
-  }, [isNested, readonly, editor.state.doc, pos]);
-
-  useEffect(() => {
-    const parent = getParent();
-    if (!parent) return;
-    const { node, pos } = parent;
-    const allChecked = areAllChecked(node, pos, editor.state.doc);
-
-    // no need to create a transaction if the check state is
-    // not changed.
-    if (node.attrs.checked === allChecked) return;
-
-    // check parent item if all child items are checked.
-    editor.commands.command(({ tr }) => {
-      tr.setNodeMarkup(pos, undefined, { checked: allChecked });
-      return true;
-    });
-  }, [editor.commands, editor.state.doc, getParent, node, node.childCount]);
-
-  useEffect(() => {
-    const { checked, total } = countCheckedItems(node);
-    const percentage = Math.round((checked / total) * 100);
-    setStats({ checked, total, percentage });
-  }, [isNested, node]);
+    return editor.state.doc.resolve(pos).parent.type.name === TaskItem.name;
+  }, [editor.state.doc, pos]);
 
   return (
     <>
-      {!isNested && (
+      {isNested ? null : (
         <Flex
           sx={{
             position: "relative",
@@ -109,7 +67,7 @@ export function TaskListComponent(
           <Box
             sx={{
               height: "100%",
-              width: `${stats.percentage}%`,
+              width: `${Math.round((stats.checked / stats.total) * 100)}%`,
               position: "absolute",
               bg: "shade",
 
@@ -118,6 +76,41 @@ export function TaskListComponent(
               transition: "width 250ms ease-out"
             }}
           />
+          {editor.isEditable ? (
+            <Icon
+              path={checked ? Icons.check : ""}
+              stroke="1px"
+              contentEditable={false}
+              tabIndex={1}
+              sx={{
+                border: "2px solid",
+                borderColor: checked ? "accent" : "icon",
+                borderRadius: "default",
+                p: "1px",
+                zIndex: 1,
+                // mt: isMobile ? "0.20ch" : "0.36ch",
+                marginInlineStart: 1,
+                cursor: editor.isEditable ? "pointer" : "unset",
+                ":hover": isMobile
+                  ? undefined
+                  : {
+                      borderColor: "accent"
+                    },
+                fontFamily: "inherit"
+              }}
+              onClick={() => {
+                const parentPos = getPos();
+                editor.commands.command(({ tr }) => {
+                  const node = tr.doc.nodeAt(parentPos);
+                  if (!node) return false;
+                  toggleChildren(tr, node, !checked, parentPos);
+                  return true;
+                });
+              }}
+              color={checked ? "accent" : "icon"}
+              size={isMobile ? "1.70ch" : "1.46ch"}
+            />
+          ) : null}
           <Input
             readOnly={!editor.isEditable || readonly}
             value={title || ""}
@@ -125,14 +118,19 @@ export function TaskListComponent(
             sx={{
               flex: 1,
               p: 0,
-              px: 2,
+              px: 1,
               zIndex: 1,
               color: "var(--paragraph-secondary)",
               fontSize: "inherit",
               fontFamily: "inherit"
             }}
-            placeholder="Untitled"
+            placeholder={strings.untitled()}
             onChange={(e) => {
+              e.target.value = replaceDateTime(
+                e.target.value,
+                editor.storage.dateFormat,
+                editor.storage.timeFormat
+              );
               updateAttributes(
                 { title: e.target.value },
                 { addToHistory: true, preventUpdate: false }
@@ -143,25 +141,38 @@ export function TaskListComponent(
             <>
               <ToolButton
                 toggled={false}
-                title="Make tasklist readonly"
+                title={strings.readonlyTaskList()}
                 icon={readonly ? "readonlyOn" : "readonlyOff"}
                 variant="small"
                 sx={{
                   zIndex: 1
                 }}
                 onClick={() => {
-                  const pos = getPos();
-                  const node = editor.current?.state.doc.nodeAt(pos);
-                  if (!node) return;
-                  updateAttributes(
-                    { readonly: !node.attrs.readonly },
-                    { addToHistory: true, preventUpdate: false }
-                  );
+                  const parentPos = getPos();
+                  editor.commands.command(({ tr }) => {
+                    const node = tr.doc.nodeAt(parentPos);
+                    if (!node) return false;
+                    const toggleState = !node.attrs.readonly;
+                    tr.setNodeMarkup(tr.mapping.map(parentPos), null, {
+                      ...node.attrs,
+                      readonly: toggleState
+                    });
+                    node.descendants((node, pos) => {
+                      if (node.type.name === TaskList.name) {
+                        const actualPos = pos + parentPos + 1;
+                        tr.setNodeMarkup(tr.mapping.map(actualPos), null, {
+                          ...node.attrs,
+                          readonly: toggleState
+                        });
+                      }
+                    });
+                    return true;
+                  });
                 }}
               />
               <ToolButton
                 toggled={false}
-                title="Move all checked tasks to bottom"
+                title={strings.sortTaskList()}
                 icon="sortTaskList"
                 variant="small"
                 sx={{
@@ -169,7 +180,7 @@ export function TaskListComponent(
                 }}
                 onClick={() => {
                   const pos = getPos();
-                  editor.current
+                  editor
                     ?.chain()
                     .focus()
                     .command(({ tr }) => {
@@ -180,7 +191,7 @@ export function TaskListComponent(
               />
               <ToolButton
                 toggled={false}
-                title="Clear completed tasks"
+                title={strings.clearCompletedTasks()}
                 icon="clear"
                 variant="small"
                 sx={{
@@ -189,7 +200,7 @@ export function TaskListComponent(
                 onClick={() => {
                   const pos = getPos();
 
-                  editor.current
+                  editor
                     ?.chain()
                     .focus()
                     .command(({ tr }) => {
@@ -204,7 +215,7 @@ export function TaskListComponent(
             variant={"body"}
             sx={{
               ml: 1,
-              mr: 2,
+              mr: 1,
               color: "var(--paragraph-secondary)",
               flexShrink: 0,
               zIndex: 1,
@@ -218,7 +229,10 @@ export function TaskListComponent(
       <Box
         ref={forwardRef}
         dir={textDirection}
-        contentEditable={editor.isEditable && !isReadonly}
+        contentEditable={editor.isEditable && !readonly}
+        onPaste={(e) => {
+          if (readonly) e.preventDefault();
+        }}
         sx={{
           ul: {
             display: "block",
@@ -248,19 +262,4 @@ export function TaskListComponent(
       />
     </>
   );
-}
-
-function areAllChecked(node: Node, pos: number, doc: Node) {
-  const children = findChildren(
-    node,
-    (node) => node.type.name === TaskItemNode.name
-  );
-
-  for (const child of children) {
-    const childPos = pos + child.pos + 1;
-    const node = doc.nodeAt(childPos);
-    if (!node?.attrs.checked) return false;
-  }
-
-  return true;
 }

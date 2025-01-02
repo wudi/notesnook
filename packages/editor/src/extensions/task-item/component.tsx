@@ -18,17 +18,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 import { Box, Flex } from "@theme-ui/components";
-import { ReactNodeViewProps } from "../react";
+import { ReactNodeViewProps } from "../react/index.js";
 import { Icon } from "@notesnook/ui";
-import { Icons } from "../../toolbar/icons";
-import { Node as ProsemirrorNode } from "prosemirror-model";
-import { Transaction } from "prosemirror-state";
-import { findChildren, findChildrenInRange } from "@tiptap/core";
+import { Icons } from "../../toolbar/icons.js";
+import { findChildrenInRange } from "@tiptap/core";
 import { useCallback } from "react";
-import { TaskItemNode, TaskItemAttributes } from "./task-item";
-import { useIsMobile } from "../../toolbar/stores/toolbar-store";
-import { isiOS } from "../../utils/platform";
-import { DesktopOnly } from "../../components/responsive";
+import type { TaskItemAttributes } from "./task-item.js";
+import { useIsMobile } from "../../toolbar/stores/toolbar-store.js";
+import { isiOS } from "../../utils/platform.js";
+import { DesktopOnly } from "../../components/responsive/index.js";
+import TaskItem from "@tiptap/extension-task-item";
+import { strings } from "@notesnook/intl";
 
 export function TaskItemComponent(
   props: ReactNodeViewProps<TaskItemAttributes>
@@ -38,37 +38,27 @@ export function TaskItemComponent(
   const isMobile = useIsMobile();
 
   const toggle = useCallback(() => {
-    if (!editor.isEditable || !editor.current) return false;
+    if (!editor.isEditable || !editor) return false;
 
-    const { empty, from, to } = editor.current.state.selection;
+    const { empty, from, to } = editor.state.selection;
     const selectedTaskItems = findChildrenInRange(
-      editor.current.state.doc,
+      editor.state.doc,
       { from, to },
-      (node) => node.type.name === TaskItemNode.name
+      (node) => node.type.name === TaskItem.name
     );
     if (!empty && selectedTaskItems.findIndex((a) => a.node === node) > -1) {
-      editor.current.commands.command(({ tr }) => {
-        for (const { node, pos } of selectedTaskItems) {
+      editor.commands.command(({ tr }) => {
+        for (const { pos } of selectedTaskItems) {
           tr.setNodeMarkup(pos, null, { checked: !checked });
-          toggleChildren(node, tr, !checked, pos);
         }
         return true;
       });
     } else {
       updateAttributes({ checked: !checked });
-
-      const pos = getPos();
-      const node = editor.current?.state.doc.nodeAt(pos);
-      if (!node) return false;
-
-      editor.commands.command(({ tr }) => {
-        toggleChildren(node, tr, !checked, pos);
-        return true;
-      });
     }
 
     return true;
-  }, [editor, checked, updateAttributes, getPos, node]);
+  }, [editor, checked, updateAttributes, node]);
 
   return (
     <>
@@ -115,7 +105,7 @@ export function TaskItemComponent(
           fontFamily: "inherit"
         }}
         onMouseDown={(e) => {
-          if (globalThis["keyboardShown"]) {
+          if (globalThis.keyboardShown) {
             e.preventDefault();
           }
           toggle();
@@ -157,19 +147,19 @@ export function TaskItemComponent(
           {editor.isEditable && (
             <Icon
               className="deleleTaskItem"
-              title="Delete this task item"
+              title={strings.delete()}
               path={Icons.close}
               size={18}
               sx={{
                 cursor: "pointer"
               }}
               onClick={() => {
-                if (!editor.current) return;
+                if (!editor) return;
                 const pos = getPos();
 
                 // we need to get a fresh instance of the task list instead
                 // of using the one we got via props.
-                const node = editor.current.state.doc.nodeAt(pos);
+                const node = editor.state.doc.nodeAt(pos);
                 if (!node) return;
 
                 editor.commands.command(({ tr }) => {
@@ -183,25 +173,4 @@ export function TaskItemComponent(
       </DesktopOnly>
     </>
   );
-}
-
-function toggleChildren(
-  node: ProsemirrorNode,
-  tr: Transaction,
-  toggleState: boolean,
-  parentPos: number
-): Transaction {
-  const children = findChildren(
-    node,
-    (node) => node.type.name === TaskItemNode.name
-  );
-
-  for (const { pos } of children) {
-    // need to add 1 to get inside the node
-    const actualPos = pos + parentPos + 1;
-    tr.setNodeMarkup(actualPos, undefined, {
-      checked: toggleState
-    });
-  }
-  return tr;
 }

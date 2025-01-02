@@ -21,21 +21,22 @@ import { Flex, FlexProps } from "@theme-ui/components";
 import {
   getDefaultPresets,
   STATIC_TOOLBAR_GROUPS,
-  MOBILE_STATIC_TOOLBAR_GROUPS
-} from "./tool-definitions";
+  MOBILE_STATIC_TOOLBAR_GROUPS,
+  READONLY_MOBILE_STATIC_TOOLBAR_GROUPS
+} from "./tool-definitions.js";
 import { useEffect, useMemo } from "react";
-import { Editor } from "../types";
-import { ToolbarGroup } from "./components/toolbar-group";
-import { EditorFloatingMenus } from "./floating-menus";
+import { Editor } from "../types.js";
+import { ToolbarGroup } from "./components/toolbar-group.js";
+import { EditorFloatingMenus } from "./floating-menus/index.js";
 import {
   ToolbarLocation,
   useIsMobile,
   useToolbarStore
-} from "./stores/toolbar-store";
-import { ToolbarDefinition } from "./types";
+} from "./stores/toolbar-store.js";
+import { ToolbarDefinition } from "./types.js";
 
 type ToolbarProps = FlexProps & {
-  editor: Editor | null;
+  editor: Editor;
   location: ToolbarLocation;
   tools?: ToolbarDefinition;
   defaultFontFamily: string;
@@ -57,9 +58,13 @@ export function Toolbar(props: ToolbarProps) {
   const toolbarTools = useMemo(
     () =>
       isMobile
-        ? [...MOBILE_STATIC_TOOLBAR_GROUPS, ...tools]
-        : [...STATIC_TOOLBAR_GROUPS, ...tools],
-    [tools, isMobile]
+        ? editor.isEditable
+          ? [...MOBILE_STATIC_TOOLBAR_GROUPS, ...tools]
+          : READONLY_MOBILE_STATIC_TOOLBAR_GROUPS
+        : editor.isEditable
+        ? [...STATIC_TOOLBAR_GROUPS, ...tools]
+        : [],
+    [tools, editor.isEditable, isMobile]
   );
 
   const setToolbarLocation = useToolbarStore(
@@ -82,17 +87,16 @@ export function Toolbar(props: ToolbarProps) {
     setDefaultFontSize
   ]);
 
-  if (!editor) return null;
   return (
     <>
       <Flex
         className={["editor-toolbar", className].join(" ")}
         sx={{
-          ...sx,
           flexWrap: isMobile ? "nowrap" : "wrap",
           overflowX: isMobile ? "auto" : "hidden",
           bg: "background",
-          borderRadius: isMobile ? "0px" : "default"
+          borderRadius: isMobile ? "0px" : "default",
+          ...sx
         }}
         {...flexProps}
       >
@@ -102,6 +106,7 @@ export function Toolbar(props: ToolbarProps) {
               key={tools.join("")}
               tools={tools}
               editor={editor}
+              groupId={tools.join("")}
               sx={{
                 borderRight: "1px solid var(--separator)",
                 ":last-of-type": { borderRight: "none" },

@@ -17,24 +17,22 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+import { strings } from "@notesnook/intl";
 import React from "react";
 import { Linking, Platform, View } from "react-native";
+import Config from "react-native-config";
 import { Button } from "../../components/ui/button";
 import { usePricing } from "../../hooks/use-pricing";
 import {
   eSendEvent,
   presentSheet,
-  ToastEvent
+  ToastManager
 } from "../../services/event-manager";
 import PremiumService from "../../services/premium";
 import { useUserStore } from "../../stores/use-user-store";
-import {
-  SUBSCRIPTION_PROVIDER,
-  SUBSCRIPTION_STATUS
-} from "../../utils/constants";
+import { SUBSCRIPTION_STATUS } from "../../utils/constants";
 import { eOpenPremiumDialog } from "../../utils/events";
 import { SIZE } from "../../utils/size";
-import Config from "react-native-config";
 export const Subscription = () => {
   const user = useUserStore((state) => state.user);
   const monthlyPlan = usePricing("monthly");
@@ -42,8 +40,11 @@ export const Subscription = () => {
     user?.subscription?.type !== SUBSCRIPTION_STATUS.PREMIUM &&
     user?.subscription?.type !== SUBSCRIPTION_STATUS.BETA;
 
+  const hasCancelledPremium =
+    SUBSCRIPTION_STATUS.PREMIUM_CANCELLED === user?.subscription?.type;
+
   const subscriptionProviderInfo =
-    SUBSCRIPTION_PROVIDER[user?.subscription?.provider];
+    strings.subscriptionProviderInfo[user?.subscription?.provider];
 
   const manageSubscription = () => {
     if (!user?.isEmailConfirmed) {
@@ -53,24 +54,20 @@ export const Subscription = () => {
 
     if (Config.GITHUB_RELEASE === "true") {
       presentSheet({
-        paragraph:
-          "This version of Notesnook app does not support in-app purchases. Kindly login on the Notesnook web app to make the purchase.",
+        paragraph: strings.subNotSupported(),
         action: () => {
           Linking.openURL("https://app.notesnook.com");
         },
-        actionText: "Go to web app"
+        actionText: strings.goToWebApp()
       });
       return;
     }
 
-    if (
-      user?.subscription?.type === SUBSCRIPTION_STATUS.PREMIUM_CANCELLED &&
-      Platform.OS === "android"
-    ) {
+    if (hasCancelledPremium && Platform.OS === "android") {
       if (user.subscription?.provider === 3) {
-        ToastEvent.show({
-          heading: "Subscribed on web",
-          message: "Open your web browser to manage your subscription.",
+        ToastManager.show({
+          heading: strings.subOnWeb(),
+          message: strings.openInBrowserToManageSub(),
           type: "success"
         });
         return;
@@ -88,6 +85,13 @@ export const Subscription = () => {
     }
   };
 
+  function getPrice() {
+    return Platform.OS === "android"
+      ? monthlyPlan?.product?.subscriptionOfferDetails[0]?.pricingPhases
+          .pricingPhaseList?.[0]?.formattedPrice
+      : monthlyPlan?.product?.localizedPrice;
+  }
+
   return (
     <View>
       {isNotPro ? (
@@ -103,23 +107,17 @@ export const Subscription = () => {
           onPress={manageSubscription}
           title={
             !user?.isEmailConfirmed
-              ? "Confirm your email"
-              : user.subscription?.provider === 3 &&
-                user.subscription?.type ===
-                  SUBSCRIPTION_STATUS.PREMIUM_CANCELLED
-              ? "Manage subscription from desktop app"
-              : user.subscription?.type ===
-                  SUBSCRIPTION_STATUS.PREMIUM_CANCELLED &&
+              ? strings.confirmEmail()
+              : user.subscription?.provider === 3 && hasCancelledPremium
+              ? strings.manageSubDesktop()
+              : hasCancelledPremium &&
                 Platform.OS === "android" &&
                 Config.GITHUB_RELEASE !== "true"
-              ? "Resubscribe from Google Playstore"
-              : user.subscription?.type === SUBSCRIPTION_STATUS.PREMIUM_EXPIRED
-              ? `Resubscribe to Pro (${
-                  monthlyPlan?.product?.localizedPrice || "$4.49"
-                } / mo)`
-              : `Get Pro (${
-                  monthlyPlan?.product?.localizedPrice || "$4.49"
-                } / mo)`
+              ? strings.resubFromPlaystore()
+              : user.subscription?.type ===
+                  SUBSCRIPTION_STATUS.PREMIUM_EXPIRED || hasCancelledPremium
+              ? `${strings.resubToPro()} (${getPrice() || "$4.49"} / mo)`
+              : `${strings.getPro()} (${getPrice() || "$4.49"} / mo)`
           }
         />
       ) : null}
@@ -128,20 +126,21 @@ export const Subscription = () => {
       user.subscription?.type !== SUBSCRIPTION_STATUS.PREMIUM_EXPIRED &&
       user.subscription?.type !== SUBSCRIPTION_STATUS.BASIC ? (
         <Button
-          title={subscriptionProviderInfo?.title}
+          title={subscriptionProviderInfo?.title()}
           onPress={() => {
             presentSheet({
-              title: subscriptionProviderInfo.title,
-              paragraph: subscriptionProviderInfo.desc
+              title: subscriptionProviderInfo.title(),
+              paragraph: subscriptionProviderInfo.desc()
             });
           }}
           style={{
             alignSelf: "flex-start",
-            borderRadius: 100
+            width: "100%",
+            paddingHorizontal: 0
           }}
-          fontSize={SIZE.sm}
+          fontSize={SIZE.xs}
           height={30}
-          type="grayAccent"
+          type="secondaryAccented"
         />
       ) : null}
     </View>

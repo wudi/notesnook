@@ -19,12 +19,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import { Box, Flex, Text } from "@theme-ui/components";
 import { useEffect, useRef, useState } from "react";
-import { SelectionBasedReactNodeViewProps } from "../react";
-import { Icons } from "../../toolbar";
+import { ReactNodeViewProps } from "../react/index.js";
+import { Icons } from "../../toolbar/index.js";
 import { Icon } from "@notesnook/ui";
-import { WebClipAttributes } from "./web-clip";
-import { DesktopOnly } from "../../components/responsive";
-import { ToolbarGroup } from "../../toolbar/components/toolbar-group";
+import { WebClipAttributes } from "./web-clip.js";
+import { DesktopOnly } from "../../components/responsive/index.js";
+import { ToolbarGroup } from "../../toolbar/components/toolbar-group.js";
 
 const FAILED_CONTENT = `<html><head>
 <title>Failed to load web clip</title>
@@ -34,25 +34,32 @@ const FAILED_CONTENT = `<html><head>
 </body>
 </html>`;
 
-export function WebClipComponent(
-  props: SelectionBasedReactNodeViewProps<WebClipAttributes>
-) {
+export function WebClipComponent(props: ReactNodeViewProps<WebClipAttributes>) {
   const { editor, selected, node, updateAttributes } = props;
   const [isLoading, setIsLoading] = useState(true);
   const embedRef = useRef<HTMLIFrameElement>(null);
   const resizeObserverRef = useRef<ResizeObserver>();
-  const { src, title, fullscreen, html } = node.attrs;
+  const { src, title, fullscreen, progress } = node.attrs;
 
   useEffect(() => {
-    const iframe = embedRef.current;
-    if (!iframe || !iframe.contentDocument || !isLoading || !html) return;
-    iframe.contentDocument.open();
-    iframe.contentDocument.write(html || FAILED_CONTENT);
-    iframe.contentDocument.close();
-    iframe.contentDocument.head.innerHTML += `<base target="_blank">`;
+    (async function () {
+      if (!isLoading) return;
 
-    setIsLoading(false);
-  }, [html]);
+      const html = await editor.storage
+        .getAttachmentData?.(node.attrs)
+        .catch(() => null);
+
+      const iframe = embedRef.current;
+      if (!iframe || !iframe.contentDocument) return;
+      iframe.contentDocument.open();
+      iframe.contentDocument.write(
+        typeof html !== "string" || !html ? FAILED_CONTENT : html
+      );
+      iframe.contentDocument.close();
+      iframe.contentDocument.head.innerHTML += `<base target="_blank">`;
+      setIsLoading(false);
+    })();
+  }, []);
 
   useEffect(() => {
     function fullscreenchanged() {
@@ -80,12 +87,15 @@ export function WebClipComponent(
   useEffect(() => {
     if (embedRef.current?.contentDocument) {
       resizeObserverRef.current = new ResizeObserver(() => {
-        resizeIframe(node.attrs, embedRef.current);
+        setTimeout(() => resizeIframe(node.attrs, embedRef.current), 100);
       });
       resizeObserverRef.current.observe(
         embedRef.current?.contentDocument?.body
       );
     }
+    return () => {
+      resizeObserverRef.current?.disconnect();
+    };
   }, []);
 
   return (
@@ -148,6 +158,7 @@ export function WebClipComponent(
                 >
                   <ToolbarGroup
                     editor={editor}
+                    groupId="webclipTools"
                     tools={[
                       "webclipFullScreen",
                       "webclipOpenExternal",
@@ -193,10 +204,14 @@ export function WebClipComponent(
               width: "100%",
               height: "calc(100% - 20px)",
               alignItems: "center",
-              justifyContent: "center"
+              justifyContent: "center",
+              flexDirection: "column"
             }}
           >
             <Icon path={Icons.loading} rotate size={32} />
+            {progress ? (
+              <Text sx={{ mt: 2 }}>Loading web clip ({progress}%)</Text>
+            ) : null}
           </Flex>
         )}
       </Box>

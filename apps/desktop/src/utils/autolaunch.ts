@@ -25,7 +25,11 @@ Type=Application
 Version=${app.getVersion()}
 Name=${app.getName()}
 Comment=${app.getName()} startup script
-Exec=${process.execPath}${hidden ? " --hidden" : ""}
+Exec=${
+  process.env.APPIMAGE
+    ? `${process.env.APPIMAGE}${hidden ? " --hidden" : ""}`
+    : `${process.execPath}${hidden ? " --hidden" : ""}`
+}
 StartupNotify=false
 Terminal=false`;
 
@@ -34,6 +38,8 @@ const LINUX_AUTOSTART_DIRECTORY_PATH = path.join(
   ".config",
   "autostart"
 );
+
+const STARTUP_ARGS = ["--hidden"];
 
 export class AutoLaunch {
   static enable(hidden: boolean) {
@@ -47,10 +53,14 @@ export class AutoLaunch {
         LINUX_DESKTOP_ENTRY(hidden)
       );
     } else {
+      const loginItemSettings = app.getLoginItemSettings({
+        args: STARTUP_ARGS
+      });
+      if (loginItemSettings.openAtLogin) return;
       app.setLoginItemSettings({
         openAtLogin: true,
         openAsHidden: hidden,
-        args: ["--hidden"]
+        args: STARTUP_ARGS
       });
     }
   }

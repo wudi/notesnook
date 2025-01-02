@@ -48,23 +48,23 @@ export const Expiring = () => {
   const [visible, setVisible] = useState(false);
   const [status, setStatus] = useState({
     title: "Your trial is ending soon",
-    offer: null,
+    offer: "Get 30% off",
     extend: true
   });
   const pricing = usePricing("yearly");
-
-  const promo = status.offer
-    ? {
-        promoCode:
-          pricing?.info?.discount > 30
-            ? pricing.info.sku
-            : "com.streetwriters.notesnook.sub.yr.trialoffer",
-        text: `GET ${
-          pricing?.info?.discount > 30 ? pricing?.info?.discount : 30
-        }% OFF on yearly`,
-        discount: pricing?.info?.discount > 30 ? pricing?.info?.discount : 30
-      }
-    : null;
+  const promo =
+    status.offer && pricing?.info
+      ? {
+          promoCode:
+            pricing?.info?.discount > 30
+              ? pricing.info.sku
+              : "com.streetwriters.notesnook.sub.yr.trialoffer",
+          text: `GET ${
+            pricing?.info?.discount > 30 ? pricing?.info?.discount : 30
+          }% OFF on yearly`,
+          discount: pricing?.info?.discount > 30 ? pricing?.info?.discount : 30
+        }
+      : null;
 
   useEffect(() => {
     eSubscribeEvent(eOpenTrialEndingDialog, open);
@@ -186,7 +186,7 @@ export const Expiring = () => {
 
               {status.extend && (
                 <Button
-                  type="gray"
+                  type="plain"
                   title="Not sure yet? Extend trial for 7 days"
                   textStyle={{
                     textDecorationLine: "underline"
