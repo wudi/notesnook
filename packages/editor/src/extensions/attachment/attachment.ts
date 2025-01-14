@@ -17,43 +17,31 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { Node, mergeAttributes, findChildren, Editor } from "@tiptap/core";
+import { Node, mergeAttributes, findChildren } from "@tiptap/core";
 import { Attribute } from "@tiptap/core";
-import { createSelectionBasedNodeView } from "../react";
-import { AttachmentComponent } from "./component";
+import { createNodeView } from "../react/index.js";
+import { AttachmentComponent } from "./component.js";
+import { Attachment } from "./types.js";
 
 export type AttachmentType = "image" | "file" | "camera";
 export interface AttachmentOptions {
+  types: string[];
   HTMLAttributes: Record<string, unknown>;
-  onDownloadAttachment: (editor: Editor, attachment: Attachment) => boolean;
-  onOpenAttachmentPicker: (editor: Editor, type: AttachmentType) => boolean;
-  onPreviewAttachment: (editor: Editor, attachment: Attachment) => boolean;
 }
-
-export type AttachmentWithProgress = AttachmentProgress & Attachment;
-
-export type Attachment = {
-  hash: string;
-  filename: string;
-  mime: string;
-  size: number;
-};
-
-export type AttachmentProgress = {
-  progress: number;
-  type: "upload" | "download" | "encrypt";
-  hash: string;
-};
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     attachment: {
-      openAttachmentPicker: (type: AttachmentType) => ReturnType;
       insertAttachment: (attachment: Attachment) => ReturnType;
       removeAttachment: () => ReturnType;
-      downloadAttachment: (attachment: Attachment) => ReturnType;
-      setAttachmentProgress: (progress: AttachmentProgress) => ReturnType;
-      previewAttachment: (options: Attachment) => ReturnType;
+      updateAttachment: (
+        attachment: Partial<Attachment>,
+        options: {
+          preventUpdate?: boolean;
+          ignoreEdit?: boolean;
+          query: (attachment: Attachment) => boolean;
+        }
+      ) => ReturnType;
     };
   }
 }
@@ -67,10 +55,8 @@ export const AttachmentNode = Node.create<AttachmentOptions>({
 
   addOptions() {
     return {
-      HTMLAttributes: {},
-      onDownloadAttachment: () => false,
-      onOpenAttachmentPicker: () => false,
-      onPreviewAttachment: () => false
+      types: [this.name],
+      HTMLAttributes: {}
     };
   },
 
@@ -82,6 +68,7 @@ export const AttachmentNode = Node.create<AttachmentOptions>({
 
   addAttributes() {
     return {
+      type: { default: "file", rendered: false },
       progress: {
         default: 0,
         rendered: false
@@ -109,7 +96,7 @@ export const AttachmentNode = Node.create<AttachmentOptions>({
   },
 
   addNodeView() {
-    return createSelectionBasedNodeView(AttachmentComponent, {
+    return createNodeView(AttachmentComponent, {
       shouldUpdate: ({ attrs: prev }, { attrs: next }) => {
         return prev.progress !== next.progress;
       },
@@ -143,50 +130,39 @@ export const AttachmentNode = Node.create<AttachmentOptions>({
         ({ commands }) => {
           return commands.deleteSelection();
         },
-      downloadAttachment:
-        (attachment) =>
-        ({ editor }) => {
-          return this.options.onDownloadAttachment(editor, attachment);
-        },
-      openAttachmentPicker:
-        (type: AttachmentType) =>
-        ({ editor }) => {
-          return this.options.onOpenAttachmentPicker(editor, type);
-        },
-      setAttachmentProgress:
-        (options) =>
+      updateAttachment:
+        (attachment, options) =>
         ({ state, tr, dispatch }) => {
-          const { hash, progress } = options;
           const attachments = findChildren(
             state.doc,
             (node) =>
-              (node.type.name === this.name || node.type.name === "image") &&
-              node.attrs.hash === hash
+              this.options.types.includes(node.type.name) &&
+              options.query(node.attrs as Attachment)
           );
-          for (const attachment of attachments) {
-            tr.setNodeMarkup(attachment.pos, attachment.node.type, {
-              ...attachment.node.attrs,
-              progress: progress === 100 ? null : progress
+          if (!attachments.length) return false;
+
+          for (const { node, pos } of attachments) {
+            const progress = attachment.progress || node.attrs.progress;
+            tr.setNodeMarkup(pos, node.type, {
+              ...node.attrs,
+              ...attachment,
+              progress:
+                progress !== undefined && progress < 100 ? progress : undefined
             });
           }
-          tr.setMeta("preventUpdate", true);
+          tr.setMeta("preventUpdate", options.preventUpdate || false);
+          tr.setMeta("ignoreEdit", options.ignoreEdit || false);
           tr.setMeta("addToHistory", false);
           if (dispatch) dispatch(tr);
           return true;
-        },
-
-      previewAttachment:
-        (attachment) =>
-        ({ editor }) => {
-          if (!this.options.onPreviewAttachment) return false;
-          return this.options.onPreviewAttachment(editor, attachment);
         }
     };
   },
 
   addKeyboardShortcuts() {
     return {
-      "Mod-Shift-A": () => this.editor.commands.openAttachmentPicker("file")
+      "Mod-Shift-A": () =>
+        this.editor.storage.openAttachmentPicker?.("file") || true
     };
   }
 

@@ -18,7 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 import { ThemeUIStyleObject } from "@theme-ui/core";
-import { SchemeColors } from "../../theme-engine/types";
+import { SchemeColors } from "../../theme-engine/types.js";
 import { alpha } from "@theme-ui/color";
 
 export const createButtonVariant = (
@@ -44,13 +44,17 @@ export const createButtonVariant = (
   px: 2,
   py: "7.5px",
 
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+
   transition: "transform 50ms ease-out",
   ":hover:not(:disabled):not(:active)": {
     bg: background,
     filter: "brightness(90%)",
     ...states?.hover
   },
-  ":active": {
+  ":active:not(:disabled)": {
     bg: background,
     filter: "brightness(85%)",
     transform: "scale(0.98) !important",

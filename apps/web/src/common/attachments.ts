@@ -17,38 +17,55 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import FS from "../interfaces/fs";
+import { strings } from "@notesnook/intl";
+import { logger } from "../utils/logger";
+import { showToast } from "../utils/toast";
 import { db } from "./db";
+import { checkUpload, decryptFile, saveFile } from "../interfaces/fs";
 
-async function download(hash: string) {
-  const attachment = db.attachments?.attachment(hash);
-  if (!attachment) return;
-  const downloadResult = await db.fs?.downloadFile(
-    attachment.metadata.hash,
-    attachment.metadata.hash,
-    attachment.chunkSize,
-    attachment.metadata
-  );
+async function download(hash: string, groupId?: string) {
+  const attachment = await db.attachments.attachment(hash);
+  if (!attachment) {
+    logger.debug("could not find attachment for download", { hash, groupId });
+    return;
+  }
+  const downloadResult = await db
+    .fs()
+    .downloadFile(
+      groupId || attachment.hash,
+      attachment.hash,
+      attachment.chunkSize
+    );
   if (!downloadResult) throw new Error("Failed to download file.");
 
-  const key = await db.attachments?.decryptKey(attachment.key);
+  const key = await db.attachments.decryptKey(attachment.key);
   if (!key) throw new Error("Invalid key for attachment.");
 
   return { key, attachment };
 }
 
 export async function saveAttachment(hash: string) {
-  const response = await download(hash);
-  if (!response) return;
+  try {
+    const response = await download(hash);
+    if (!response) return;
 
-  const { attachment, key } = response;
-  await FS.saveFile(attachment.metadata.hash, {
-    key,
-    iv: attachment.iv,
-    name: attachment.metadata.filename,
-    type: attachment.metadata.type,
-    isUploaded: !!attachment.dateUploaded
-  });
+    const { attachment, key } = response;
+    await saveFile(attachment.hash, {
+      key,
+      iv: attachment.iv,
+      name: attachment.filename,
+      type: attachment.mimeType,
+      isUploaded: !!attachment.dateUploaded
+    });
+  } catch (e) {
+    console.error(e);
+    showToast(
+      "error",
+      `${strings.attachmentsDownloadFailed(1)}: ${hash} (error: ${
+        (e as Error).message
+      })`
+    );
+  }
 }
 
 type OutputTypeToReturnType = {
@@ -59,44 +76,54 @@ type OutputTypeToReturnType = {
 export async function downloadAttachment<
   TType extends "blob" | "base64" | "text",
   TOutputType = OutputTypeToReturnType[TType]
->(hash: string, type: TType): Promise<TOutputType | undefined> {
-  const response = await download(hash);
-  if (!response) return;
-  const { attachment, key } = response;
+>(
+  hash: string,
+  type: TType,
+  groupId?: string
+): Promise<TOutputType | undefined> {
+  logger.debug("downloading attachment", { hash, type, groupId });
+  try {
+    const response = await download(hash, groupId);
+    if (!response) return;
+    const { attachment, key } = response;
 
-  if (type === "base64" || type === "text")
-    return (await db.attachments?.read(hash, type)) as TOutputType;
+    if (type === "base64" || type === "text")
+      return (await db.attachments.read(hash, type)) as TOutputType;
 
-  const blob = await FS.decryptFile(attachment.metadata.hash, {
-    key,
-    iv: attachment.iv,
-    name: attachment.metadata.filename,
-    type: attachment.metadata.type,
-    isUploaded: !!attachment.dateUploaded
-  });
+    const blob = await decryptFile(attachment.hash, {
+      key,
+      iv: attachment.iv,
+      name: attachment.filename,
+      type: attachment.mimeType,
+      isUploaded: !!attachment.dateUploaded
+    });
 
-  if (!blob) return;
-  return blob as TOutputType;
+    logger.debug("Attachment decrypted", { hash });
+
+    if (!blob) return;
+    return blob as TOutputType;
+  } catch (e) {
+    console.error(e);
+    showToast(
+      "error",
+      `${strings.attachmentsDownloadFailed(1)}: ${hash} (error: ${
+        (e as Error).message
+      })`
+    );
+  }
 }
 
 export async function checkAttachment(hash: string) {
-  const attachment = db.attachments?.attachment(hash);
+  const attachment = await db.attachments.attachment(hash);
   if (!attachment) return { failed: "Attachment not found." };
 
   try {
-    const size = await FS.getUploadedFileSize(hash);
-    if (size <= 0) return { failed: "File length is 0." };
+    await checkUpload(hash, attachment.chunkSize, attachment.size);
+    await db.attachments.markAsFailed(attachment.id);
   } catch (e) {
-    return { failed: e instanceof Error ? e.message : "Unknown error." };
+    const reason = e instanceof Error ? e.message : "Unknown error.";
+    await db.attachments.markAsFailed(attachment.id, reason);
+    return { failed: reason };
   }
   return { success: true };
-}
-
-const ABYTES = 17;
-export function getTotalSize(attachments: any[]) {
-  let size = 0;
-  for (const attachment of attachments) {
-    size += attachment.length + ABYTES;
-  }
-  return size;
 }
