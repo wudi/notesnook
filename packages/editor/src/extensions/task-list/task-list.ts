@@ -19,27 +19,52 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import { mergeAttributes, wrappingInputRule } from "@tiptap/core";
 import { TaskList } from "@tiptap/extension-task-list";
-import { createNodeView } from "../react";
-import { TaskListComponent } from "./component";
+import { createNodeView } from "../react/index.js";
+import { TaskListComponent } from "./component.js";
 import { Plugin, PluginKey, NodeSelection } from "prosemirror-state";
-import TaskItem, { inputRegex } from "@tiptap/extension-task-item";
+import { inputRegex } from "@tiptap/extension-task-item";
 import { dropPoint } from "prosemirror-transform";
 import {
   findChildrenByType,
+  getDeletedNodes,
   getParentAttributes,
-  hasSameAttributes
-} from "../../utils/prosemirror";
-import { countCheckedItems } from "./utils";
+  hasSameAttributes,
+  findParentNodeClosestToPos,
+  getExactChangedNodes
+} from "../../utils/prosemirror.js";
+import {
+  countCheckedItems,
+  findRootTaskList,
+  toggleChildren
+} from "./utils.js";
+import { Node as ProsemirrorNode } from "@tiptap/pm/model";
+import { TaskItemNode } from "../task-item/index.js";
+import { ListItem } from "../list-item/list-item.js";
 
+type TaskListStats = { checked: number; total: number };
 export type TaskListAttributes = {
   title: string;
   readonly: boolean;
+  stats: TaskListStats;
 };
 
 const stateKey = new PluginKey("task-item-drop-override");
 export const TaskListNode = TaskList.extend({
   addAttributes() {
     return {
+      stats: {
+        default: { checked: 0, total: 0 },
+        rendered: false,
+        parseHTML: (element) => {
+          // do not update stats for nested task lists
+          if (!!element.closest("ul")) return { checked: 0, total: 0 };
+          const total = element.querySelectorAll("li.checklist--item").length;
+          const checked = element.querySelectorAll(
+            "li.checklist--item.checked"
+          ).length;
+          return { checked, total };
+        }
+      },
       title: {
         default: null,
         keepOnSplit: false,
@@ -73,13 +98,7 @@ export const TaskListNode = TaskList.extend({
   parseHTML() {
     return [
       {
-        tag: "ul",
-        getAttrs: (node) => {
-          if (node instanceof Node && node instanceof HTMLElement) {
-            return node.classList.contains("checklist") && null;
-          }
-          return false;
-        },
+        tag: "ul.checklist",
         priority: 51
       }
     ];
@@ -138,6 +157,7 @@ export const TaskListNode = TaskList.extend({
       shouldUpdate: (prev, next) => {
         return (
           !hasSameAttributes(prev.attrs, next.attrs) ||
+          !hasSameAttributes(prev.attrs.stats, next.attrs.stats) ||
           prev.childCount !== next.childCount ||
           countCheckedItems(prev).checked !== countCheckedItems(next).checked
         );
@@ -157,7 +177,7 @@ export const TaskListNode = TaskList.extend({
           // behavior and instead moves the item to the very end.
           handleDrop(view, event, slice, moved) {
             const isTaskItem =
-              slice.content.firstChild?.type.name === TaskItem.name;
+              slice.content.firstChild?.type.name === TaskItemNode.name;
             if (isTaskItem) {
               const eventPos = view.posAtCoords(eventCoords(event));
               if (!eventPos) return;
@@ -207,6 +227,101 @@ export const TaskListNode = TaskList.extend({
             return false;
           }
         }
+      }),
+      // this plugin is responsible for handling all the interactive/reactive
+      // logic of a task list:
+      // 1. Auto checking parent task item based on its children
+      // 2. Auto checking child task items based on its parent
+      // 3. Keeping the stats (checked/total items etc.) synced with
+      //    the task list.
+      new Plugin({
+        key: new PluginKey("task-list-state-management"),
+        appendTransaction(transactions, oldState, newState) {
+          if (!transactions[0].docChanged) return;
+
+          const changedNodes = getExactChangedNodes(
+            transactions[0],
+            (node) => node.type.name === TaskItemNode.name
+          );
+          const deletedNodes = getDeletedNodes(
+            transactions[0],
+            (node) => node.type.name === TaskList.name
+          );
+          if (changedNodes.length <= 0 && deletedNodes.length <= 0) return;
+
+          let changeCount = 0;
+          const { tr } = newState;
+          const roots = new WeakSet();
+
+          for (const edit of [...changedNodes, ...deletedNodes]) {
+            // Case # 1
+            // if the user clicks on a task item that has children, we
+            // should automatically check/uncheck all its children
+            // const oldTaskList = oldState.doc.nodeAt(edit.pos);
+            // const newTaskList = newState.doc.nodeAt(edit.pos);
+            if (
+              // when a task item has children, the task list is always the
+              // last child
+              edit.node.lastChild?.type.name === TaskList.name &&
+              !!oldState.doc.nodeAt(edit.pos)?.attrs.checked !==
+                !!newState.doc.nodeAt(edit.pos)?.attrs.checked
+            ) {
+              changeCount += toggleChildren(
+                tr,
+                edit.node,
+                edit.node.attrs.checked,
+                tr.mapping.map(edit.pos)
+              );
+            }
+
+            // Case # 2
+            // if the user clicks on a task item without any children,
+            // we should recursively move upwards in the tree to see
+            // if it's parent needs to be checked or not. We check
+            // a parent if all it's children have been checked as well.
+            // ---
+            // We use a while loop and start from the bottom up. Each iteration
+            // checks the previous task item's parent recursively.
+            let childPos = edit.pos;
+            while (childPos !== undefined) {
+              const resolvedPos = tr.doc.resolve(tr.mapping.map(childPos));
+              const parentTaskItem = findParentNodeClosestToPos(
+                resolvedPos,
+                (n) => n.type.name === TaskItemNode.name
+              );
+              //
+              if (!parentTaskItem) break;
+
+              const allChecked = areAllChecked(parentTaskItem.node);
+              // if no change needs to be made, we break the loop.
+              if (allChecked === parentTaskItem.node.attrs.checked) break;
+
+              changeCount++;
+              tr.setNodeMarkup(tr.mapping.map(parentTaskItem.pos), undefined, {
+                ...parentTaskItem.node.attrs,
+                checked: allChecked
+              });
+              childPos = parentTaskItem.pos;
+            }
+
+            // sync the stats with the new changes.
+            // we add a small optimization here to avoid checking the same
+            // root task list over and over again in case of multiple
+            // node changes
+            const root = findRootTaskList(tr.doc, edit.pos) || edit;
+            if (root && !roots.has(root)) {
+              roots.add(root);
+
+              const stats = countCheckedItems(root.node);
+              tr.setNodeMarkup(root.pos, undefined, {
+                ...root.node.attrs,
+                stats
+              });
+              changeCount++;
+            }
+          }
+          return changeCount > 0 ? tr : null;
+        }
       })
     ];
   },
@@ -221,9 +336,29 @@ export const TaskListNode = TaskList.extend({
     });
     const oldHandler = inputRule.handler;
     inputRule.handler = ({ state, range, match, chain, can, commands }) => {
-      oldHandler({ state, range, match, chain, can, commands });
+      const $from = state.selection.$from;
+      const parentNode = $from.node($from.depth - 1);
+      if (parentNode.type.name === ListItem.name) {
+        return;
+      }
 
-      state.tr.setNodeMarkup(state.tr.selection.to - 2, undefined, {
+      const tr = state.tr;
+      // reset nodes before converting them to a task list.
+      commands.clearNodes();
+
+      oldHandler({
+        state,
+        range: {
+          from: tr.mapping.map(range.from),
+          to: tr.mapping.map(range.to)
+        },
+        match,
+        chain,
+        can,
+        commands
+      });
+
+      tr.setNodeMarkup(state.tr.selection.to - 2, undefined, {
         checked: match[match.length - 1] === "x"
       });
     };
@@ -239,4 +374,20 @@ export const TaskListNode = TaskList.extend({
 
 function eventCoords(event: MouseEvent) {
   return { left: event.clientX, top: event.clientY };
+}
+
+function areAllChecked(node: ProsemirrorNode) {
+  const taskList = node.lastChild;
+  if (!taskList || taskList.type.name !== TaskList.name)
+    return !!node.attrs.checked;
+
+  let allChecked = true;
+  for (let i = 0; i < taskList.childCount; ++i) {
+    const child = taskList.child(i);
+    if (!child.attrs.checked) {
+      allChecked = false;
+      break;
+    }
+  }
+  return allChecked;
 }

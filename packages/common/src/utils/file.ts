@@ -22,7 +22,7 @@ export function formatBytes(bytes: number, decimals = 2) {
 
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+  const sizes = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
 
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
@@ -75,7 +75,7 @@ function sanitize(input: string, replacement: string) {
     .replace(windowsReservedRe, replacement)
     .replace(windowsTrailingRe, replacement);
 
-  return sanitized.slice(0, 254).toLowerCase();
+  return sanitized.slice(0, 254);
 }
 
 export function sanitizeFilename(

@@ -117,7 +117,13 @@ import {
   mdiUploadOutline,
   mdiWeb,
   mdiPencilOff,
-  mdiPencil
+  mdiPencil,
+  mdiCheckboxMultipleBlankOutline,
+  mdiCheckboxMultipleMarked,
+  mdiFormatFloatLeft,
+  mdiMessageOutline,
+  mdiVectorLink,
+  mdiPinOutline
 } from "@mdi/js";
 
 export const Icons = {
@@ -144,6 +150,7 @@ export const Icons = {
   bulletList: mdiFormatListBulleted,
   highlight: mdiFormatColorHighlight,
   textColor: mdiFormatColorText,
+  noteLink: mdiVectorLink,
   link: mdiLinkPlus,
   linkRemove: mdiLinkOff,
   openLink: mdiOpenInNew,
@@ -165,6 +172,7 @@ export const Icons = {
   imageDownload: mdiProgressDownload,
   imageFailed: mdiProgressAlert,
   imageSettings: mdiImageEditOutline,
+  imageFloat: mdiFormatFloatLeft,
   colorClear: mdiInvertColorsOff,
   save: mdiContentSaveOutline,
   copy: mdiClipboardOutline,
@@ -222,6 +230,7 @@ export const Icons = {
   tableSettings: mdiTableCog,
   math: mdiFunctionVariant,
   mathBlock: mdiMathIntegral,
+  callout: mdiMessageOutline,
   outlineList: mdiFileTreeOutline,
   fontFamily: mdiFormatFont,
   fontSize: mdiFormatFontSizeIncrease,
@@ -243,6 +252,10 @@ export const Icons = {
   resize: mdiResizeBottomRight,
   readonlyOn: mdiPencilOff,
   readonlyOff: mdiPencil,
+  selectAllUnchecked: mdiCheckboxMultipleBlankOutline,
+  selectAllChecked: mdiCheckboxMultipleMarked,
+  checkList: mdiCheckboxMarkedOutline,
+  pin: mdiPinOutline,
   none: ""
 };
 

@@ -17,15 +17,17 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { ToolProps } from "../types";
-import { Editor } from "../../types";
-import { Dropdown } from "../components/dropdown";
+import { ToolProps } from "../types.js";
+import { Editor } from "../../types.js";
+import { Dropdown } from "../components/dropdown.js";
 import { MenuItem } from "@notesnook/ui";
 import { useCallback, useMemo } from "react";
-import { Counter } from "../components/counter";
-import { useRefValue } from "../../hooks/use-ref-value";
-import { useToolbarStore } from "../stores/toolbar-store";
-import { getFontById, getFontIds, getFonts } from "../../utils/font";
+import { Counter } from "../components/counter.js";
+import { useRefValue } from "../../hooks/use-ref-value.js";
+import { useToolbarStore } from "../stores/toolbar-store.js";
+import { getFontById, getFontIds, getFonts } from "../../utils/font.js";
+import { CodeBlock } from "../../extensions/code-block/index.js";
+import { strings } from "@notesnook/intl";
 
 export function FontSize(props: ToolProps) {
   const { editor } = props;
@@ -45,27 +47,16 @@ export function FontSize(props: ToolProps) {
 
   return (
     <Counter
-      title="font size"
+      title={strings.fontSize()}
+      disabled={editor.isActive(CodeBlock.name)}
       onDecrease={() =>
-        editor.current
-          ?.chain()
-          .focus()
-          .setFontSize(`${decreaseFontSize()}px`)
-          .run()
+        editor.chain().focus().setFontSize(`${decreaseFontSize()}px`).run()
       }
       onIncrease={() => {
-        editor.current
-          ?.chain()
-          .focus()
-          .setFontSize(`${increaseFontSize()}px`)
-          .run();
+        editor.chain().focus().setFontSize(`${increaseFontSize()}px`).run();
       }}
       onReset={() =>
-        editor.current
-          ?.chain()
-          .focus()
-          .setFontSize(`${defaultFontSize}px`)
-          .run()
+        editor.chain().focus().setFontSize(`${defaultFontSize}px`).run()
       }
       value={fontSize || `${defaultFontSize}px`}
     />
@@ -93,6 +84,7 @@ export function FontFamily(props: ToolProps) {
       selectedItem={getFontById(currentFontFamily)?.title || defaultFontFamily}
       items={items}
       menuWidth={130}
+      disabled={editor.isActive(CodeBlock.name)}
     />
   );
 }
@@ -105,8 +97,7 @@ function toMenuItems(editor: Editor, currentFontFamily: string): MenuItem[] {
       type: "button",
       title: font.title,
       isChecked: font.id === currentFontFamily,
-      onClick: () =>
-        editor.current?.chain().focus().setFontFamily(font.id).run(),
+      onClick: () => editor.chain().focus().setFontFamily(font.id).run(),
       styles: {
         title: {
           fontFamily: font.font

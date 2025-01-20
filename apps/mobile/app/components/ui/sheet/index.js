@@ -28,7 +28,13 @@ import { Toast } from "../../toast";
 import { useAppState } from "../../../hooks/use-app-state";
 import SettingsService from "../../../services/settings";
 import { useUserStore } from "../../../stores/use-user-store";
+import { getContainerBorder } from "../../../utils/colors";
 
+/**
+ *
+ * @param {any} param0
+ * @returns
+ */
 const SheetWrapper = ({
   children,
   fwdRef,
@@ -37,11 +43,11 @@ const SheetWrapper = ({
   onOpen,
   closeOnTouchBackdrop = true,
   onHasReachedTop,
-  keyboardMode,
   overlay,
   overlayOpacity = 0.3,
   enableGesturesInScrollView = false,
-  bottomPadding = true
+  bottomPadding = true,
+  keyboardHandlerDisabled
 }) => {
   const localRef = useRef(null);
   const { colors } = useThemeColors("sheet");
@@ -53,8 +59,9 @@ const SheetWrapper = ({
   const smallTablet = deviceMode === "smallTablet";
   const dimensions = useSettingStore((state) => state.dimensions);
   const insets = useGlobalSafeAreaInsets();
-  const appState = useAppState();
   const lockEvents = useRef(false);
+  const locked = useUserStore((state) => state.appLocked);
+
   let width = dimensions.width > 600 ? 600 : 500;
 
   const style = React.useMemo(() => {
@@ -68,9 +75,17 @@ const SheetWrapper = ({
       borderTopLeftRadius: 15,
       alignSelf: "center",
       borderBottomRightRadius: 0,
-      borderBottomLeftRadius: 0
+      borderBottomLeftRadius: 0,
+      ...getContainerBorder(colors.primary.border, 0.5),
+      borderBottomWidth: 0
     };
-  }, [colors.primary.background, largeTablet, smallTablet, width]);
+  }, [
+    colors.primary.background,
+    colors.primary.border,
+    largeTablet,
+    smallTablet,
+    width
+  ]);
 
   const _onOpen = () => {
     if (lockEvents.current) return;
@@ -85,23 +100,21 @@ const SheetWrapper = ({
   };
 
   useEffect(() => {
-    if (SettingsService.get().appLockMode === "background") {
-      if (appState === "background") {
-        const ref = fwdRef || localRef;
-        ref?.current?.hide();
-        if (useUserStore.getState().appLocked) {
-          lockEvents.current = true;
-          const unsub = useUserStore.subscribe((state) => {
-            if (!state.appLocked) {
-              ref?.current?.show();
-              unsub();
-              lockEvents.current = false;
-            }
-          });
-        }
+    if (locked) {
+      const ref = fwdRef || localRef;
+      ref?.current?.hide();
+      if (useUserStore.getState().appLocked) {
+        lockEvents.current = true;
+        const unsub = useUserStore.subscribe((state) => {
+          if (!state.appLocked) {
+            ref?.current?.show();
+            unsub();
+            lockEvents.current = false;
+          }
+        });
       }
     }
-  }, [appState, fwdRef]);
+  }, [locked, fwdRef]);
 
   return (
     <ScopedThemeProvider value="sheet">
@@ -114,14 +127,16 @@ const SheetWrapper = ({
           width: 100,
           backgroundColor: colors.secondary.background
         }}
-        drawUnderStatusBar={false}
+        statusBarTranslucent
+        drawUnderStatusBar={true}
         containerStyle={style}
         gestureEnabled={gestureEnabled}
         initialOffsetFromBottom={1}
         onPositionChanged={onHasReachedTop}
         closeOnTouchBackdrop={closeOnTouchBackdrop}
-        keyboardMode={keyboardMode}
-        keyboardHandlerEnabled={sheetKeyboardHandler}
+        keyboardHandlerEnabled={
+          keyboardHandlerDisabled ? false : sheetKeyboardHandler
+        }
         closeOnPressBack={closeOnTouchBackdrop}
         indicatorColor={colors.secondary.background}
         onOpen={_onOpen}

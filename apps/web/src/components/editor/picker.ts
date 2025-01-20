@@ -17,50 +17,104 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { SerializedKey } from "@notesnook/crypto/dist/src/types";
+import { SerializedKey } from "@notesnook/crypto";
 import { AppEventManager, AppEvents } from "../../common/app-events";
 import { db } from "../../common/db";
-import { showBuyDialog } from "../../common/dialog-controller";
 import { TaskManager } from "../../common/task-manager";
 import { isUserPremium } from "../../hooks/use-is-user-premium";
-import fs from "../../interfaces/fs";
 import { showToast } from "../../utils/toast";
 import { showFilePicker } from "../../utils/file-picker";
+import { Attachment } from "@notesnook/editor";
+import { ImagePickerDialog } from "../../dialogs/image-picker-dialog";
+import { BuyDialog } from "../../dialogs/buy-dialog";
+import { strings } from "@notesnook/intl";
+import {
+  getUploadedFileSize,
+  hashStream,
+  writeEncryptedFile
+} from "../../interfaces/fs";
+import Config from "../../utils/config";
+import { compressImage, FileWithURI } from "../../utils/image-compressor";
+import { ImageCompressionOptions } from "../../stores/setting-store";
 
 const FILE_SIZE_LIMIT = 500 * 1024 * 1024;
 const IMAGE_SIZE_LIMIT = 50 * 1024 * 1024;
 
-export async function insertAttachment(type = "*/*") {
+export async function insertAttachments(type = "*/*") {
   if (!isUserPremium()) {
-    await showBuyDialog();
+    await BuyDialog.show({});
     return;
   }
 
-  const selectedFile = await showFilePicker({
-    acceptedFileTypes: type || "*/*"
+  const files = await showFilePicker({
+    acceptedFileTypes: type || "*/*",
+    multiple: true
   });
-  if (!selectedFile) return;
-
-  return await attachFile(selectedFile);
+  if (!files) return;
+  return await attachFiles(files);
 }
 
-export async function attachFile(selectedFile: File) {
+export async function attachFiles(files: File[]) {
   if (!isUserPremium()) {
-    await showBuyDialog();
+    await BuyDialog.show({});
     return;
   }
-  if (selectedFile.type.startsWith("image/")) {
-    return await pickImage(selectedFile);
-  } else {
-    return await pickFile(selectedFile);
+
+  let images = files.filter((f) => f.type.startsWith("image/"));
+  const imageCompressionConfig = Config.get<ImageCompressionOptions>(
+    "imageCompression",
+    ImageCompressionOptions.ASK_EVERY_TIME
+  );
+
+  switch (imageCompressionConfig) {
+    case ImageCompressionOptions.ENABLE: {
+      let compressedImages: FileWithURI[] = [];
+      for (const image of images) {
+        const compressed = await compressImage(image, {
+          maxWidth: (naturalWidth) => Math.min(1920, naturalWidth * 0.7),
+          width: (naturalWidth) => naturalWidth,
+          height: (_, naturalHeight) => naturalHeight,
+          resize: "contain",
+          quality: 0.7
+        });
+        compressedImages.push(
+          new FileWithURI([compressed], image.name, {
+            lastModified: image.lastModified,
+            type: image.type
+          })
+        );
+      }
+      images = compressedImages;
+      break;
+    }
+    case ImageCompressionOptions.DISABLE:
+      break;
+    default:
+      images =
+        images.length > 0
+          ? (await ImagePickerDialog.show({
+              images
+            })) || []
+          : [];
   }
+
+  const documents = files.filter((f) => !f.type.startsWith("image/"));
+  const attachments: Attachment[] = [];
+  for (const file of [...images, ...documents]) {
+    const attachment = file.type.startsWith("image/")
+      ? await pickImage(file)
+      : await pickFile(file);
+    if (!attachment) continue;
+    attachments.push(attachment);
+  }
+  return attachments;
 }
 
 export async function reuploadAttachment(
   type: string,
   expectedFileHash: string
 ) {
-  const selectedFile = await showFilePicker({
+  const [selectedFile] = await showFilePicker({
     acceptedFileTypes: type || "*/*"
   });
   if (!selectedFile) return;
@@ -81,48 +135,63 @@ export async function reuploadAttachment(
 }
 
 /**
- * @param {File} selectedFile
+ * @param {File} file
  * @returns
  */
-async function pickFile(selectedFile: File, options?: AddAttachmentOptions) {
+async function pickFile(
+  file: File,
+  options?: AddAttachmentOptions
+): Promise<Attachment | undefined> {
   try {
-    if (selectedFile.size > FILE_SIZE_LIMIT)
-      throw new Error("File too big. You cannot add files over 500 MB.");
-    if (!selectedFile) return;
+    if (file.size > FILE_SIZE_LIMIT)
+      throw new Error(strings.fileTooLargeDesc(500));
 
-    return await addAttachment(selectedFile, undefined, options);
+    const hash = await addAttachment(file, options);
+    return {
+      type: "file",
+      filename: file.name,
+      hash,
+      mime: file.type,
+      size: file.size
+    };
   } catch (e) {
+    console.error(e);
     showToast("error", `${(e as Error).message}`);
   }
 }
 
 /**
- * @param {File} selectedImage
+ * @param {File} file
  * @returns
  */
-async function pickImage(selectedImage: File, options?: AddAttachmentOptions) {
+async function pickImage(
+  file: File,
+  options?: AddAttachmentOptions
+): Promise<Attachment | undefined> {
   try {
-    if (selectedImage.size > IMAGE_SIZE_LIMIT)
-      throw new Error("Image too big. You cannot add images over 50 MB.");
-    if (!selectedImage) return;
+    if (file.size > IMAGE_SIZE_LIMIT)
+      throw new Error(strings.imageTooLarge(50));
+    if (!file) return;
 
-    const dataurl = await toDataURL(selectedImage);
-    return await addAttachment(selectedImage, dataurl, options);
+    const hash = await addAttachment(file, options);
+    const dimensions = await getImageDimensions(file);
+    return {
+      type: "image",
+      filename: file.name,
+      hash,
+      mime: file.type,
+      size: file.size,
+      ...dimensions
+    };
   } catch (e) {
     showToast("error", (e as Error).message);
   }
 }
 
 async function getEncryptionKey(): Promise<SerializedKey> {
-  const key = await db.attachments?.generateKey();
+  const key = await db.attachments.generateKey();
   if (!key) throw new Error("Could not generate a new encryption key.");
   return key;
-}
-
-async function toDataURL(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const base64 = Buffer.from(buffer).toString("base64");
-  return `data:${file.type};base64,${base64}`;
 }
 
 export type AttachmentProgress = {
@@ -130,14 +199,6 @@ export type AttachmentProgress = {
   type: "encrypt" | "download" | "upload";
   total: number;
   loaded: number;
-};
-
-export type Attachment = {
-  hash: string;
-  filename: string;
-  mime: string;
-  size: number;
-  dataurl?: string;
 };
 
 type AddAttachmentOptions = {
@@ -148,48 +209,49 @@ type AddAttachmentOptions = {
 
 async function addAttachment(
   file: File,
-  dataurl: string | undefined,
   options: AddAttachmentOptions = {}
-): Promise<Attachment> {
-  const { expectedFileHash, forceWrite, showProgress = true } = options;
+): Promise<string> {
+  const { expectedFileHash, showProgress = true } = options;
+  let forceWrite = options.forceWrite;
 
   const action = async () => {
-    const reader: ReadableStreamReader<Uint8Array> = (
-      file.stream() as unknown as ReadableStream<Uint8Array>
-    ).getReader();
-
-    const { hash, type: hashType } = await fs.hashStream(reader);
+    const reader = file.stream().getReader();
+    const { hash, type: hashType } = await hashStream(reader);
     reader.releaseLock();
 
     if (expectedFileHash && hash !== expectedFileHash)
       throw new Error(
         `Please select the same file for reuploading. Expected hash ${expectedFileHash} but got ${hash}.`
       );
-    const exists = db.attachments?.exists(hash);
+
+    const exists = await db.attachments.attachment(hash);
+    if (!forceWrite && exists) {
+      forceWrite = (await getUploadedFileSize(hash)) === 0;
+    }
+
     if (forceWrite || !exists) {
+      if (forceWrite && exists) {
+        if (!(await db.fs().deleteFile(hash, false)))
+          throw new Error("Failed to delete attachment from server.");
+        await db.attachments.reset(exists.id);
+      }
+
       const key: SerializedKey = await getEncryptionKey();
 
-      const output = await fs.writeEncryptedFile(file, key, hash);
+      const output = await writeEncryptedFile(file, key, hash);
       if (!output) throw new Error("Could not encrypt file.");
 
-      if (forceWrite && exists) await db.attachments?.reset(hash);
-      await db.attachments?.add({
+      await db.attachments.add({
         ...output,
         hash,
         hashType,
-        filename: file.name,
-        type: file.type,
+        filename: exists?.filename || file.name,
+        mimeType: exists?.type || file.type,
         key
       });
     }
 
-    return {
-      hash: hash,
-      filename: file.name,
-      mime: file.type,
-      size: file.size,
-      dataurl
-    };
+    return hash;
   };
 
   const result = showProgress
@@ -200,25 +262,43 @@ async function addAttachment(
   return result;
 }
 
-function withProgress<T>(file: File, action: () => Promise<T>): Promise<T> {
+function withProgress<T>(
+  file: File,
+  action: () => Promise<T>
+): Promise<T | Error> {
   return TaskManager.startTask({
     type: "modal",
-    title: "Encrypting attachment",
-    subtitle: "Please wait while we encrypt this attachment for upload.",
+    title: strings.encryptingAttachment(),
+    subtitle: strings.encryptingAttachmentDesc(),
     action: (report) => {
       const event = AppEventManager.subscribe(
         AppEvents.UPDATE_ATTACHMENT_PROGRESS,
         ({ type, total, loaded }: AttachmentProgress) => {
           if (type !== "encrypt") return;
           report({
-            current: loaded,
-            total: total,
+            current: Math.round((loaded / total) * 100),
+            total: 100,
             text: file.name
           });
         }
       );
-      event.unsubscribe();
-      return action();
+      return action().finally(() => event.unsubscribe());
     }
   });
+}
+
+function getImageDimensions(file: File) {
+  return new Promise<{ width: number; height: number } | undefined>(
+    (resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const { naturalWidth: width, naturalHeight: height } = img;
+        resolve({ width, height });
+      };
+      img.onerror = () => {
+        resolve(undefined);
+      };
+      img.src = URL.createObjectURL(file);
+    }
+  );
 }

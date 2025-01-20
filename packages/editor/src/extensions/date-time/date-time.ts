@@ -23,9 +23,7 @@ import {
   InputRuleFinder,
   ExtendedRegExpMatchArray
 } from "@tiptap/core";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import { formatDate } from "@notesnook/core/dist/utils/date";
+import { formatDate } from "@notesnook/common";
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -173,4 +171,37 @@ function textInputRule(config: {
       if (config.after) config.after(props);
     }
   });
+}
+
+export function replaceDateTime(
+  value: string,
+  dateFormat = "DD-MM-YYYY",
+  timeFormat: "12-hour" | "24-hour" = "12-hour"
+) {
+  value = value.replaceAll(
+    "/time ",
+    formatDate(Date.now(), {
+      timeFormat,
+      type: "time"
+    }) + " "
+  );
+
+  value = value.replaceAll(
+    "/date ",
+    formatDate(Date.now(), {
+      dateFormat,
+      type: "date"
+    }) + " "
+  );
+
+  value = value.replaceAll(
+    "/now ",
+    formatDate(Date.now(), {
+      dateFormat,
+      timeFormat,
+      type: "date-time"
+    }) + " "
+  );
+
+  return value;
 }

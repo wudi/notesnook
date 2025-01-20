@@ -19,7 +19,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import { Flex, Text } from "@theme-ui/components";
 import { ThemeUICSSObject } from "@theme-ui/core";
-import { Icon } from "../icons";
+import { Close, Icon } from "../icons";
+import { strings } from "@notesnook/intl";
 
 type IconTagProps = {
   text: string;
@@ -33,10 +34,20 @@ type IconTagProps = {
   };
   testId?: string;
   highlight?: boolean;
+  onDismiss?: () => void;
 };
 
 function IconTag(props: IconTagProps) {
-  const { icon: Icon, text, title, onClick, styles, testId, highlight } = props;
+  const {
+    icon: Icon,
+    text,
+    title,
+    onClick,
+    onDismiss,
+    styles,
+    testId,
+    highlight
+  } = props;
 
   return (
     <Flex
@@ -74,7 +85,7 @@ function IconTag(props: IconTagProps) {
     >
       <Icon
         size={11}
-        // color={styles?.icon?.color || (highlight ? "primary" : "icon")}
+        color={highlight ? "accent" : "icon"}
         sx={{ ...styles?.icon, flexShrink: 0 }}
       />
       <Text
@@ -92,6 +103,22 @@ function IconTag(props: IconTagProps) {
       >
         {text}
       </Text>
+      {onDismiss && (
+        <Close
+          size={12}
+          title={strings.remove()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDismiss();
+          }}
+          sx={{
+            ml: 1,
+            ":hover": { bg: "background-error" },
+            ":hover path": { fill: "var(--icon-error) !important" }
+          }}
+        />
+      )}
     </Flex>
   );
 }

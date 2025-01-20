@@ -17,13 +17,25 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-import { db } from "./db";
 import { TaskManager } from "./task-manager";
-import { zip } from "../utils/zip";
-import { saveAs } from "file-saver";
-import { showToast } from "../utils/toast";
-import { sanitizeFilename } from "@notesnook/common";
+import { createWriteStream } from "../utils/stream-saver";
+import { FilteredSelector } from "@notesnook/core";
+import { Note } from "@notesnook/core";
+import { fromAsyncIterator } from "../utils/stream";
+import {
+  sanitizeFilename,
+  exportNotes as _exportNotes,
+  exportNote as _exportNote,
+  exportContent
+} from "@notesnook/common";
 import Vault from "./vault";
+import { ExportStream } from "../utils/streams/export-stream";
+import { showToast } from "../utils/toast";
+import { ConfirmDialog } from "../dialogs/confirm";
+import { db } from "./db";
+import { toAsyncIterator } from "@notesnook-importer/core/dist/src/utils/stream";
+import { saveAs } from "file-saver";
+import { strings } from "@notesnook/intl";
 
 export async function exportToPDF(
   title: string,
@@ -41,12 +53,21 @@ export async function exportToPDF(
     iframe.style.width = "0";
     iframe.style.height = "0";
     iframe.style.border = "0";
+    iframe.loading = "eager";
 
-    iframe.onload = () => {
+    iframe.onload = async () => {
       if (!iframe.contentWindow) return;
       if (iframe.contentDocument) iframe.contentDocument.title = title;
       iframe.contentWindow.onbeforeunload = () => closePrint(false);
       iframe.contentWindow.onafterprint = () => closePrint(true);
+
+      if (
+        iframe.contentDocument &&
+        !!iframe.contentDocument.querySelector(".math-block,.math-inline")
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+
       iframe.contentWindow.print();
     };
 
@@ -60,83 +81,113 @@ export async function exportToPDF(
 }
 
 export async function exportNotes(
-  format: "pdf" | "md" | "txt" | "html",
-  noteIds: string[]
+  format: "pdf" | "md" | "txt" | "html" | "md-frontmatter",
+  notes: FilteredSelector<Note>
 ): Promise<boolean> {
+  const result = await TaskManager.startTask({
+    type: "modal",
+    title: strings.exportingNotes(),
+    subtitle: strings.exportingNotesDesc(),
+    action: async (report) => {
+      const { createZipStream } = await import("../utils/streams/zip-stream");
+
+      const errors: Error[] = [];
+      const exportStream = new ExportStream(report, (e) => errors.push(e));
+      await fromAsyncIterator(
+        _exportNotes(notes, { format, unlockVault: Vault.unlockVault })
+      )
+        .pipeThrough(exportStream)
+        .pipeThrough(createZipStream())
+        .pipeTo(await createWriteStream("notes.zip"));
+      return {
+        errors,
+        count: exportStream.progress
+      };
+    }
+  });
+  if (result instanceof Error) {
+    ConfirmDialog.show({
+      title: `Export failed`,
+      message: result.stack || result.message,
+      positiveButtonText: strings.okay()
+    });
+    return false;
+  } else {
+    ConfirmDialog.show({
+      title: `Exported ${result.count} notes`,
+      message:
+        result.errors.length > 0
+          ? `Export completed with ${result.errors.length} errors:
+
+${result.errors.map((e, i) => `${i + 1}. ${e.message}`).join("\n")}`
+          : "Export completed with 0 errors.",
+      positiveButtonText: strings.okay()
+    });
+    return true;
+  }
+}
+
+const FORMAT_TO_EXT = {
+  pdf: "pdf",
+  md: "md",
+  txt: "txt",
+  html: "html",
+  "md-frontmatter": "md"
+} as const;
+
+export async function exportNote(
+  note: Note,
+  options: {
+    format: keyof typeof FORMAT_TO_EXT;
+  }
+) {
+  if (options.format === "pdf") {
+    const content = await exportContent(note, {
+      format: "pdf",
+      unlockVault: Vault.unlockVault
+    });
+    if (!content) return false;
+    console.log(content);
+    return await exportToPDF(note.title, content);
+  }
+
   return await TaskManager.startTask({
     type: "modal",
-    title: "Exporting notes",
-    subtitle: "Please wait while your notes are exported.",
+    title: strings.exportingNote(note.title),
+    subtitle: strings.exportingNoteDesc(),
     action: async (report) => {
-      let vaultUnlocked = false;
+      const hasAttachments =
+        (await db.relations.from(note, "attachment").count()) > 0;
+      const stream = fromAsyncIterator(
+        _exportNote(note, {
+          format: options.format,
+          unlockVault: Vault.unlockVault
+        })
+      ).pipeThrough(
+        new ExportStream(report, (e) => {
+          console.error(e);
+          showToast("error", e.message);
+        })
+      );
 
-      if (noteIds.length === 1 && db.notes?.note(noteIds[0])?.data.locked) {
-        vaultUnlocked = await Vault.unlockVault();
-        if (!vaultUnlocked) return false;
-      } else if (noteIds.length > 1 && (await db.vault?.exists())) {
-        vaultUnlocked = await Vault.unlockVault();
-        if (!vaultUnlocked)
-          showToast(
-            "error",
-            "Failed to unlock vault. Locked notes will be skipped."
+      if (hasAttachments) {
+        const { createZipStream } = await import("../utils/streams/zip-stream");
+        await stream
+          .pipeThrough(createZipStream())
+          .pipeTo(
+            await createWriteStream(
+              `${sanitizeFilename(note.title, { replacement: "-" })}.zip`
+            )
           );
-      }
-
-      const files = [];
-      let index = 0;
-      for (const noteId of noteIds) {
-        const note = db.notes?.note(noteId);
-        if (!note) continue;
-        if (!vaultUnlocked && note.data.locked) continue;
-
-        report({
-          current: ++index,
-          total: noteIds.length,
-          text: `Exporting "${note.title}"...`
-        });
-
-        const rawContent = await db.content?.raw(note.data.contentId);
-        const content = note.data.locked
-          ? await db.vault?.decryptContent(rawContent)
-          : rawContent;
-
-        const exported = await note
-          .export(format === "pdf" ? "html" : format, content)
-          .catch((e: Error) => {
-            console.error(note.data, e);
-            showToast(
-              "error",
-              `Failed to export note "${note.title}": ${e.message}`
-            );
-          });
-
-        if (typeof exported !== "string") {
-          showToast("error", `Failed to export note "${note.title}"`);
-          continue;
-        }
-
-        if (format === "pdf") {
-          return await exportToPDF(note.title, exported);
-        }
-
-        files.push({
-          filename: note.title,
-          content: exported,
-          date: note.dateEdited
-        });
-      }
-
-      if (!files.length) return false;
-      if (files.length === 1) {
-        saveAs(
-          new Blob([Buffer.from(files[0].content, "utf-8")]),
-          `${sanitizeFilename(files[0].filename)}.${format}`
-        );
       } else {
-        const zipped = await zip(files, format);
-        saveAs(new Blob([zipped.buffer]), "notes.zip");
+        for await (const file of toAsyncIterator(stream)) {
+          if (typeof file.data === "string")
+            saveAs(new Blob([Buffer.from(file.data, "utf-8")]), file.path);
+          else if (file.data instanceof Uint8Array)
+            saveAs(new Blob([file.data]), file.path);
+          else await file.data.pipeTo(await createWriteStream(file.path));
+        }
       }
-
       return true;
     }
   });
